@@ -3,58 +3,91 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"io"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/quic-go/quic-go"
-	"golang.org/x/term"
+
+	"github.com/vincent-vinf/quic-shell/pkg/shell"
+	"github.com/vincent-vinf/quic-shell/pkg/types"
 )
 
 const addr = "localhost:4242"
 
-const message = "123"
-
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	err := client(ctx)
+	conn, err := newQuicConn(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
+	data, err := types.PackMsg(&types.Message{
+		ID: "1",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = conn.SendMessage(data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	start(ctx, conn)
 
 	cancel()
 }
 
-func client(ctx context.Context) error {
+func start(ctx context.Context, conn quic.Connection) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			stream, err := conn.AcceptStream(ctx)
+			if err != nil {
+				log.Println("conn: ", err)
+				continue
+			}
+			go func(s quic.Stream) {
+				log.Println("new shell")
+				err := shell.New(s, s)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				defer s.Close()
+			}(stream)
+		}
+	}
+}
+
+func newQuicConn(ctx context.Context) (quic.Connection, error) {
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
-		NextProtos:         []string{"quic-echo-example"},
+		NextProtos:         []string{types.AppProtocol},
 	}
-	conn, err := quic.DialAddr(ctx, addr, tlsConf, nil)
+	return quic.DialAddr(ctx, addr, tlsConf, &quic.Config{
+		KeepAlivePeriod: time.Second * 30,
+		EnableDatagrams: true,
+	})
+}
+
+func newStream(ctx context.Context, conn quic.Connection) error {
+	//stream, err := conn.AcceptStream(ctx)
+	//if err != nil {
+	//	return err
+	//}
+	//defer func() { _ = stream.Close() }()
+	//
+	//_, err = io.Copy(os.Stdout, stream)
+	//if err != nil {
+	//	return err
+	//}
+	time.Sleep(time.Minute)
+	err := conn.SendMessage([]byte("abcc"))
 	if err != nil {
 		return err
 	}
-
-	stream, err := conn.OpenStream()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stream.Close() }()
-
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
-
-	go func() {
-		_, _ = io.Copy(stream, os.Stdin)
-		log.Println("stream -> out: end")
-	}()
-	_, _ = io.Copy(os.Stdout, stream)
-	log.Println("in -> stream: end")
 
 	return nil
 }

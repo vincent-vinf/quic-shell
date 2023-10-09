@@ -4,8 +4,9 @@ go 1.21.1
 
 require (
 	github.com/creack/pty v1.1.18
+	github.com/gorilla/websocket v1.5.0
 	github.com/quic-go/quic-go v0.39.0
-	golang.org/x/term v0.12.0
+	golang.org/x/term v0.8.0
 )
 
 require (
